@@ -59,6 +59,8 @@ New profile labels use letters, numbers, dots, underscores or hyphens. Do not us
 
 Choosing a set action opens a second picker showing each saved name and email. Escape closes either picker without applying a change. Slash commands and their arguments support pi's command completion.
 
+Choosing **Show current identity** displays the effective name and email first, with each value marked as coming from `global`, `repository`, or another Git configuration scope. It then lists all configured identity entries so a repository override and its inherited global value are easy to distinguish.
+
 **Add profile** saves a new label, name and email. **Edit profile** changes the selected profile's commit name/email; leave an input empty to keep the current value. Existing signing keys and other fields are preserved. **Delete profile** asks for confirmation and removes only the saved entry.
 
 Managing a profile does not update or undo settings previously applied to a repository or the global Git configuration. After editing, apply the profile again to use its new values. Clearing applied settings is a separate menu action.
@@ -73,7 +75,7 @@ Direct commands are also available:
 | `/git-identity reset` | Clear current repository identity settings |
 | `/git-identity reset --global` | Remove global `user.name` and `user.email` |
 | `/git-identity list` | List saved profiles with names and emails |
-| `/git-identity current` | Show configured names/emails and their source files |
+| `/git-identity current` | Show the effective identity plus each configured name/email and its scope and source file |
 | `/git-identity add [LABEL]` | Prompt for a new saved profile |
 | `/git-identity edit [LABEL]` | Pick a profile and edit its name/email |
 | `/git-identity remove [LABEL]` | Pick a profile and confirm deletion |

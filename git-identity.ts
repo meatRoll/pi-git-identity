@@ -10,6 +10,9 @@ const exec = promisify(execFile);
 type Scope = "local" | "global";
 type Profile = { name: string; email: string; signingKey?: string; [key: string]: unknown };
 type ProfileAction = "add" | "edit" | "remove";
+type IdentityKey = "user.name" | "user.email";
+type IdentityEntry = { scope: string; origin: string; key: IdentityKey; value: string };
+const identityKeys: IdentityKey[] = ["user.name", "user.email"];
 const profileActions: ProfileAction[] = ["add", "edit", "remove"];
 const help = "/git-identity → menu\n/git-identity PROFILE [--global]\n/git-identity reset [--global]\n/git-identity add | edit | remove [PROFILE]\n/git-identity list | current | help";
 
@@ -127,8 +130,10 @@ async function run(cwd: string, args: string[]): Promise<string> {
     const result = await exec("git", args, { cwd, timeout: 15_000, maxBuffer: 128 * 1024 });
     return result.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
   } catch (error) {
-    const failure = error as Error & { stderr?: string };
-    throw new Error(failure.stderr?.trim() || failure.message);
+    const failure = error as Error & { stderr?: string; code?: number };
+    const wrapped = new Error(failure.stderr?.trim() || failure.message) as Error & { code?: number };
+    wrapped.code = failure.code;
+    throw wrapped;
   }
 }
 
@@ -140,6 +145,64 @@ async function config(cwd: string, scope: Scope, key: string): Promise<string | 
     if ((error as { code?: number }).code === 1) return undefined;
     throw error;
   }
+}
+
+function configScopeLabel(scope: string): string {
+  if (scope === "local") return "repository";
+  if (scope === "global") return "global";
+  if (scope === "system") return "system";
+  if (scope === "worktree") return "worktree";
+  if (scope === "command") return "command";
+  return scope;
+}
+
+function parseIdentityLine(line: string): IdentityEntry | undefined {
+  const [scope, origin, rest] = line.split("\t", 3);
+  if (!scope || !origin || !rest) return undefined;
+  const match = rest.match(/^(user\.(?:name|email))(?:\s(.*))?$/);
+  if (!match || !identityKeys.includes(match[1] as IdentityKey)) return undefined;
+  return { scope, origin, key: match[1] as IdentityKey, value: match[2] ?? "" };
+}
+
+async function configuredIdentity(cwd: string): Promise<IdentityEntry[]> {
+  try {
+    const output = await run(cwd, ["config", "--show-scope", "--show-origin", "--get-regexp", "^user\\.(name|email)$"]);
+    return output.split("\n").map(parseIdentityLine).filter((entry): entry is IdentityEntry => entry !== undefined);
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return [];
+    throw error;
+  }
+}
+
+async function effectiveIdentityEntry(cwd: string, key: IdentityKey): Promise<IdentityEntry | undefined> {
+  try {
+    const output = await run(cwd, ["config", "--show-scope", "--show-origin", "--get", key]);
+    const [scope, origin, ...valueParts] = output.split("\t");
+    if (!scope || !origin || !valueParts.length) return undefined;
+    return { scope, origin, key, value: valueParts.join("\t") };
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return undefined;
+    throw error;
+  }
+}
+
+async function currentIdentity(cwd: string): Promise<string> {
+  const entries = await configuredIdentity(cwd);
+  const effective = await Promise.all(identityKeys.map((key) => effectiveIdentityEntry(cwd, key)));
+  const lines = ["Effective identity for the current directory:"];
+  for (const [index, key] of identityKeys.entries()) {
+    const entry = effective[index];
+    const label = key === "user.name" ? "name" : "email";
+    lines.push(entry
+      ? `  ${label}: ${entry.value} [${configScopeLabel(entry.scope)}] (${entry.origin})`
+      : `  ${label}: (not configured)`);
+  }
+  if (!entries.length) return lines.concat("", "No identity configured.").join("\n");
+  lines.push("", "Configured identity entries:");
+  for (const entry of entries) {
+    lines.push(`  [${configScopeLabel(entry.scope)}] ${entry.key} = ${entry.value} (${entry.origin})`);
+  }
+  return lines.join("\n");
 }
 
 async function repository(cwd: string): Promise<void> {
@@ -247,14 +310,7 @@ async function handle(args: string, ctx: ExtensionCommandContext): Promise<void>
     } else if (action === "list") {
       output = Object.entries(profiles(true)).map(([key, value]) => `${key} — ${value.name} <${value.email}>`).join("\n") || "No saved profiles.";
     } else if (action === "current") {
-      // Git reads below do not create a profile store, unlike upstream current.
-      try {
-        const result = await exec("git", ["config", "--show-origin", "--get-regexp", "^user\\.(name|email)$"], { cwd: ctx.cwd, timeout: 15_000 });
-        output = result.stdout.trim();
-      } catch (error) {
-        if ((error as { code?: number }).code !== 1) throw error;
-        output = "No identity configured.";
-      }
+      output = await currentIdentity(ctx.cwd);
     } else if (action === "reset") {
       output = await reset(ctx.cwd, selectedScope);
     } else {

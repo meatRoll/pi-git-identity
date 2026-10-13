@@ -53,7 +53,11 @@ test("explicit commands with real git-identity and isolated Git config", async (
     await t.test("loading and inspecting current config never creates a store", async () => {
       assert.deepEqual([...commands.keys()], ["git-identity"]);
       assert.equal(existsSync(join(root, ".gitidentities")), false);
-      assert.equal((await invoke("current"))?.text, "No identity configured.");
+      const current = await invoke("current");
+      assert.match(current?.text ?? "", /Effective identity for the current directory:/);
+      assert.match(current?.text ?? "", /name: \(not configured\)/);
+      assert.match(current?.text ?? "", /email: \(not configured\)/);
+      assert.match(current?.text ?? "", /No identity configured\./);
       assert.equal(existsSync(join(root, ".gitidentities")), false);
       assert.equal(existsSync(join(root, ".gitconfig")), false);
     });
@@ -70,6 +74,11 @@ test("explicit commands with real git-identity and isolated Git config", async (
     git("init", "-q");
     git("config", "--global", "user.name", "Default User");
     git("config", "--global", "user.email", "default@example.test");
+    const globalCurrent = await invoke("current");
+    assert.match(globalCurrent?.text ?? "", /name: Default User \[global\] \(file:.*\.gitconfig\)/);
+    assert.match(globalCurrent?.text ?? "", /email: default@example\.test \[global\] \(file:.*\.gitconfig\)/);
+    assert.match(globalCurrent?.text ?? "", /\[global\] user\.name = Default User/);
+    assert.match(globalCurrent?.text ?? "", /\[global\] user\.email = default@example\.test/);
     const store = join(root, ".gitidentities");
     const data = {
       personal: { name: "Personal User", email: "personal@example.test", signingKey: "" },
@@ -93,6 +102,11 @@ test("explicit commands with real git-identity and isolated Git config", async (
     await t.test("repository menu applies profile and both commit identities", async () => {
       selections.push("Set repository identity", "personal — Personal User <personal@example.test>");
       assert.equal((await invoke(""))?.type, "info");
+      const localCurrent = await invoke("current");
+      assert.match(localCurrent?.text ?? "", /name: Personal User \[repository\] \(file:\.git\/config\)/);
+      assert.match(localCurrent?.text ?? "", /email: personal@example\.test \[repository\] \(file:\.git\/config\)/);
+      assert.match(localCurrent?.text ?? "", /\[global\] user\.name = Default User/);
+      assert.match(localCurrent?.text ?? "", /\[repository\] user\.name = Personal User/);
       assert.equal(git("config", "--local", "user.email"), data.personal.email);
       assert.equal(git("config", "--global", "user.email"), "default@example.test");
       git("commit", "--allow-empty", "-qm", "personal test");
