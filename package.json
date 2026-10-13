@@ -1,0 +1,36 @@
+{
+  "name": "pi-git-identity",
+  "version": "0.1.0",
+  "description": "Interactive pi commands for the git-identity profile manager.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meatRoll/pi-git-identity.git"
+  },
+  "homepage": "https://github.com/meatRoll/pi-git-identity#readme",
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "git",
+    "git-identity"
+  ],
+  "pi": {
+    "extensions": [
+      "./git-identity.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "latest",
+    "@earendil-works/pi-coding-agent": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
