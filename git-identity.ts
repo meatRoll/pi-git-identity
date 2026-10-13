@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -7,16 +8,19 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 const exec = promisify(execFile);
 type Scope = "local" | "global";
-type Profile = { name: string; email: string; signingKey?: string };
-const help = "/git-identity → menu\n/git-identity PROFILE [--global]\n/git-identity reset [--global]\n/git-identity list | current | help";
+type Profile = { name: string; email: string; signingKey?: string; [key: string]: unknown };
+type ProfileAction = "add" | "edit" | "remove";
+const profileActions: ProfileAction[] = ["add", "edit", "remove"];
+const help = "/git-identity → menu\n/git-identity PROFILE [--global]\n/git-identity reset [--global]\n/git-identity add | edit | remove [PROFILE]\n/git-identity list | current | help";
 
-function profiles(): Record<string, Profile> {
+function profiles(allowMissing = false): Record<string, Profile> {
   let data: unknown;
   try {
     data = JSON.parse(readFileSync(join(homedir(), ".gitidentities"), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("No saved profiles. Save one first with: git identity add PROFILE");
+      if (allowMissing) return {};
+      throw new Error("No saved profiles. Create one with /git-identity add.");
     }
     throw new Error("Unable to read ~/.gitidentities; check its JSON format.");
   }
@@ -30,6 +34,92 @@ function profiles(): Record<string, Profile> {
     }
   }
   return data as Record<string, Profile>;
+}
+
+function saveProfile(id: string, expected: Profile | undefined, next: Profile | undefined): void {
+  let target = join(homedir(), ".gitidentities");
+  try {
+    target = realpathSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const lockPath = `${target}.lock`;
+  let lock: number;
+  try {
+    lock = openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error("Profile store is locked by another operation. Try again after it finishes.");
+    }
+    throw error;
+  }
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  try {
+    const latest = profiles(true);
+    const current = Object.hasOwn(latest, id) ? latest[id] : undefined;
+    if (JSON.stringify(current) !== JSON.stringify(expected)) {
+      throw new Error("This profile changed while the dialog was open. Reopen the operation to review it.");
+    }
+    if (next) latest[id] = next;
+    else delete latest[id];
+    let mode = 0o600;
+    try { mode = statSync(target).mode & 0o777; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    writeFileSync(temporary, JSON.stringify(latest, null, 2) + "\n", { flag: "wx", mode });
+    renameSync(temporary, target);
+  } finally {
+    closeSync(lock);
+    rmSync(temporary, { force: true });
+    rmSync(lockPath, { force: true });
+  }
+}
+
+async function manageProfile(ctx: ExtensionCommandContext, action: ProfileAction, id?: string): Promise<string | undefined> {
+  const saved = profiles(action === "add");
+  if (action === "add") {
+    const entered = id ?? await ctx.ui.input("Profile label", "e.g. personal or work");
+    if (entered === undefined) return;
+    id = entered.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) ||
+        [...profileActions, "reset", "list", "current", "help", "use"].includes(id)) {
+      throw new Error("Use a short profile label containing letters, numbers, dots, underscores or hyphens, not a command action.");
+    }
+    if (Object.hasOwn(saved, id)) throw new Error(`Profile already exists: ${id}. Use edit instead.`);
+  } else {
+    if (!id) {
+      const ids = Object.keys(saved);
+      if (!ids.length) throw new Error("No saved profiles. Create one with /git-identity add.");
+      const labels = ids.map((key) => `${key} — ${saved[key].name} <${saved[key].email}>`);
+      const choice = await ctx.ui.select(`Choose profile to ${action}`, labels);
+      if (!choice) return;
+      id = ids[labels.indexOf(choice)];
+      if (!id) return;
+    }
+    if (!Object.hasOwn(saved, id)) throw new Error(`Unknown profile: ${id}`);
+  }
+  const original = Object.hasOwn(saved, id) ? saved[id] : undefined;
+  if (action === "remove") {
+    const accepted = await ctx.ui.confirm(`Delete profile ${id}?`,
+      `Remove the saved ${original!.name} <${original!.email}> entry? Applied Git settings will remain as they are.`);
+    if (!accepted) return;
+    saveProfile(id, original, undefined);
+    return `Deleted saved profile: ${id}. Applied Git settings remain as they are.`;
+  }
+  const enteredName = await ctx.ui.input(`Commit name for ${id}`, original ? `${original.name} (leave empty to keep)` : "e.g. Example User");
+  if (enteredName === undefined) return;
+  const enteredEmail = await ctx.ui.input(`Commit email for ${id}`, original ? `${original.email} (leave empty to keep)` : "e.g. user@example.test");
+  if (enteredEmail === undefined) return;
+  const name = enteredName.trim() || original?.name || "";
+  const email = enteredEmail.trim() || original?.email || "";
+  if (!name || !/^[^\s<>@]+@[^\s<>@]+$/.test(email)) {
+    throw new Error("Provide a commit name and an email address.");
+  }
+  if (/["`$\\\r\n\0]/.test(name + email)) {
+    throw new Error("Name/email contain characters unsupported by git-identity's shell quoting.");
+  }
+  saveProfile(id, original, { ...(original ?? { signingKey: "" }), name, email });
+  return `${action === "add" ? "Added" : "Updated"} saved profile: ${id} — ${name} <${email}>. Apply it separately to change Git settings.`;
 }
 
 async function run(cwd: string, args: string[]): Promise<string> {
@@ -109,27 +199,37 @@ async function handle(args: string, ctx: ExtensionCommandContext): Promise<void>
     const tokens = args.trim().split(/\s+/).filter(Boolean);
     const scope: Scope = tokens.includes("--global") ? "global" : "local";
     const positional = tokens.filter((token) => token !== "--global");
-    if (positional.length > 1 || tokens.filter((token) => token === "--global").length > 1 ||
-        positional.some((token) => token.startsWith("-"))) throw new Error(help);
+    const managesProfile = profileActions.includes(positional[0] as ProfileAction);
+    if (positional.length > (managesProfile ? 2 : 1) || tokens.filter((token) => token === "--global").length > 1 ||
+        positional.some((token) => token.startsWith("-")) || (managesProfile && scope === "global")) throw new Error(help);
     let action = positional[0];
     let selectedScope = scope;
-    let id: string | undefined;
+    let id: string | undefined = managesProfile ? positional[1] : undefined;
     if (!action) {
       if (tokens.length === 0) {
-        const choices = ["Set repository identity", "Set global identity", "Clear repository identity", "Clear global identity", "Show current identity", "List saved profiles"];
-        const chosen = await ctx.ui.select("Git identity", choices);
-        if (!chosen) return;
-        const index = choices.indexOf(chosen);
-        if (index < 0) return;
-        selectedScope = index === 1 || index === 3 ? "global" : "local";
-        action = index < 2 ? "use" : index < 4 ? "reset" : index === 4 ? "current" : "list";
+        const operations: { label: string; action: string; scope?: Scope }[] = [
+          { label: "Set repository identity", action: "use", scope: "local" },
+          { label: "Set global identity", action: "use", scope: "global" },
+          { label: "Clear repository identity", action: "reset", scope: "local" },
+          { label: "Clear global identity", action: "reset", scope: "global" },
+          { label: "Show current identity", action: "current" },
+          { label: "List saved profiles", action: "list" },
+          { label: "Add profile", action: "add" },
+          { label: "Edit profile", action: "edit" },
+          { label: "Delete profile", action: "remove" },
+        ];
+        const chosen = await ctx.ui.select("Git identity", operations.map((item) => item.label));
+        const operation = operations.find((item) => item.label === chosen);
+        if (!operation) return;
+        selectedScope = operation.scope ?? "local";
+        action = operation.action;
       } else {
         action = "use";
       }
       if (action === "use") {
         const saved = profiles();
         const ids = Object.keys(saved);
-        if (!ids.length) throw new Error("No saved profiles. Use git identity add PROFILE first.");
+        if (!ids.length) throw new Error("No saved profiles. Create one with /git-identity add.");
         const labels = ids.map((key) => `${key} — ${saved[key].name} <${saved[key].email}>`);
         const choice = await ctx.ui.select(`Choose ${selectedScope} identity`, labels);
         if (!choice) return;
@@ -138,10 +238,14 @@ async function handle(args: string, ctx: ExtensionCommandContext): Promise<void>
       }
     }
     let output: string;
-    if (action === "help") {
+    if (profileActions.includes(action as ProfileAction)) {
+      const result = await manageProfile(ctx, action as ProfileAction, id);
+      if (!result) return;
+      output = result;
+    } else if (action === "help") {
       output = help;
     } else if (action === "list") {
-      output = Object.entries(profiles()).map(([key, value]) => `${key} — ${value.name} <${value.email}>`).join("\n") || "No saved profiles.";
+      output = Object.entries(profiles(true)).map(([key, value]) => `${key} — ${value.name} <${value.email}>`).join("\n") || "No saved profiles.";
     } else if (action === "current") {
       // Git reads below do not create a profile store, unlike upstream current.
       try {
@@ -164,13 +268,18 @@ async function handle(args: string, ctx: ExtensionCommandContext): Promise<void>
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("git-identity", {
-    description: "Choose, clear or inspect Git identity (git-identity wrapper)",
+    description: "Manage profiles and choose, clear or inspect Git identity (git-identity wrapper)",
     getArgumentCompletions(prefix) {
       let ids: string[] = [];
       try { ids = Object.keys(profiles()); } catch { /* Show actions even without a store. */ }
       const words = prefix.split(/\s+/);
       const last = words.pop() ?? "";
-      const candidates = words.length ? ["--global"] : [...ids, "reset", "list", "current", "help", "--global"];
+      let candidates = [...ids, ...profileActions, "reset", "list", "current", "help", "--global"];
+      if (words.length) {
+        if (["edit", "remove"].includes(words[0])) candidates = ids;
+        else if (words[0] === "add") candidates = [];
+        else candidates = ["--global"];
+      }
       return candidates.filter((value) => value.startsWith(last)).map((value) => ({
         value: [...words, value].join(" "), label: value,
       }));
