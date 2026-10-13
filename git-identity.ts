@@ -8,7 +8,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 const exec = promisify(execFile);
 type Scope = "local" | "global";
 type Profile = { name: string; email: string; signingKey?: string };
-const help = "/gitid → menu\n/gitid PROFILE [--global]\n/gitid reset [--global]\n/gitid list | current | help";
+const help = "/git-identity → menu\n/git-identity PROFILE [--global]\n/git-identity reset [--global]\n/git-identity list | current | help";
 
 function profiles(): Record<string, Profile> {
   let data: unknown;
@@ -104,7 +104,7 @@ async function reset(cwd: string, scope: Scope): Promise<string> {
 }
 
 async function handle(args: string, ctx: ExtensionCommandContext): Promise<void> {
-  if (!ctx.hasUI) throw new Error("/gitid requires interactive pi or an RPC client supporting extension UI.");
+  if (!ctx.hasUI) throw new Error("/git-identity requires interactive pi or an RPC client supporting extension UI.");
   try {
     const tokens = args.trim().split(/\s+/).filter(Boolean);
     const scope: Scope = tokens.includes("--global") ? "global" : "local";
@@ -163,20 +163,18 @@ async function handle(args: string, ctx: ExtensionCommandContext): Promise<void>
 }
 
 export default function (pi: ExtensionAPI) {
-  for (const command of ["gitid", "git-identity"]) {
-    pi.registerCommand(command, {
-      description: "Choose, clear or inspect Git identity (git-identity wrapper)",
-      getArgumentCompletions(prefix) {
-        let ids: string[] = [];
-        try { ids = Object.keys(profiles()); } catch { /* Show actions even without a store. */ }
-        const words = prefix.split(/\s+/);
-        const last = words.pop() ?? "";
-        const candidates = words.length ? ["--global"] : [...ids, "reset", "list", "current", "help", "--global"];
-        return candidates.filter((value) => value.startsWith(last)).map((value) => ({
-          value: [...words, value].join(" "), label: value,
-        }));
-      },
-      handler: handle,
-    });
-  }
+  pi.registerCommand("git-identity", {
+    description: "Choose, clear or inspect Git identity (git-identity wrapper)",
+    getArgumentCompletions(prefix) {
+      let ids: string[] = [];
+      try { ids = Object.keys(profiles()); } catch { /* Show actions even without a store. */ }
+      const words = prefix.split(/\s+/);
+      const last = words.pop() ?? "";
+      const candidates = words.length ? ["--global"] : [...ids, "reset", "list", "current", "help", "--global"];
+      return candidates.filter((value) => value.startsWith(last)).map((value) => ({
+        value: [...words, value].join(" "), label: value,
+      }));
+    },
+    handler: handle,
+  });
 }

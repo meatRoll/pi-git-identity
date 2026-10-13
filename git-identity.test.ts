@@ -36,14 +36,14 @@ test("explicit commands with real git-identity and isolated Git config", async (
   } as unknown as ExtensionCommandContext;
   try {
     extension({ registerCommand(name, command) { commands.set(name, command); } } as ExtensionAPI);
-    const command = commands.get("gitid")!;
+    const command = commands.get("git-identity")!;
     const invoke = async (args: string) => {
       notices.length = 0;
       await command.handler(args, ctx);
       return notices.at(-1);
     };
     await t.test("loading and inspecting current config never creates a store", async () => {
-      assert.deepEqual([...commands.keys()], ["gitid", "git-identity"]);
+      assert.deepEqual([...commands.keys()], ["git-identity"]);
       assert.equal(existsSync(join(root, ".gitidentities")), false);
       assert.equal((await invoke("current"))?.text, "No identity configured.");
       assert.equal(existsSync(join(root, ".gitidentities")), false);

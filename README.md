@@ -1,6 +1,6 @@
 # pi-git-identity
 
-An interactive Git identity picker for [pi](https://pi.dev). Type `/gitid` and choose an action with the arrow keys; profile names, commit names and email addresses appear in the picker.
+An interactive Git identity picker for [pi](https://pi.dev). Type `/git-identity` and choose an action with the arrow keys; profile names, commit names and email addresses appear in the picker.
 
 **This extension wraps the third-party [`runebaas/git-identity`](https://github.com/runebaas/git-identity) CLI, tested with `git-identity@1.1.4`.** Saved profiles stay in its existing `~/.gitidentities` file. Repository identity changes are delegated to its `use` and `reset` commands. Global clearing, which upstream does not provide, uses Git's own config commands.
 
@@ -43,7 +43,7 @@ Do not use `reset`, `list`, `current` or `help` as profile names; they are comma
 
 ## Use
 
-`/gitid` and `/git-identity` open the same menu:
+`/git-identity` opens the menu:
 
 - Set repository identity
 - Set global identity
@@ -58,14 +58,14 @@ Direct commands are also available:
 
 | Command | Effect |
 | --- | --- |
-| `/gitid personal` | Apply a profile to the current repository |
-| `/gitid personal --global` | Apply a profile to global Git config |
-| `/gitid --global` | Open the global profile picker |
-| `/gitid reset` | Clear current repository identity settings |
-| `/gitid reset --global` | Remove global `user.name` and `user.email` |
-| `/gitid list` | List saved profiles with names and emails |
-| `/gitid current` | Show configured names/emails and their source files |
-| `/gitid help` | Show usage |
+| `/git-identity personal` | Apply a profile to the current repository |
+| `/git-identity personal --global` | Apply a profile to global Git config |
+| `/git-identity --global` | Open the global profile picker |
+| `/git-identity reset` | Clear current repository identity settings |
+| `/git-identity reset --global` | Remove global `user.name` and `user.email` |
+| `/git-identity list` | List saved profiles with names and emails |
+| `/git-identity current` | Show configured names/emails and their source files |
+| `/git-identity help` | Show usage |
 
 Changes persist in ordinary Git configuration until you clear or replace them. They also affect commits made outside pi. Clearing a scope allows identities from other scopes or included files to apply again. Included configuration files are not rewritten; the extension reports an error if an included identity prevents a requested clear.
 
