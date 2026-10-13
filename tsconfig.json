@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["git-identity.ts"]
+  "include": ["git-identity.ts", "git-identity.test.ts"]
 }

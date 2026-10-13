@@ -1,221 +1,182 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-const execFileAsync = promisify(execFile);
-const stripAnsi = (value: string) => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-
+const exec = promisify(execFile);
 type Scope = "local" | "global";
-type UiContext = Pick<ExtensionCommandContext, "cwd" | "ui">;
+type Profile = { name: string; email: string; signingKey?: string };
+const help = "/gitid → menu\n/gitid PROFILE [--global]\n/gitid reset [--global]\n/gitid list | current | help";
 
-interface IdentityCommandResult {
-  output: string;
-  error?: string;
-}
-
-async function runGitIdentity(args: string[], cwd: string): Promise<IdentityCommandResult> {
+function profiles(): Record<string, Profile> {
+  let data: unknown;
   try {
-    const result = await execFileAsync("git", ["identity", ...args], {
-      cwd,
-      env: { ...process.env, NO_COLOR: "1" },
-      maxBuffer: 1024 * 1024,
-    });
-    return {
-      output: stripAnsi(result.stdout).trim(),
-    };
+    data = JSON.parse(readFileSync(join(homedir(), ".gitidentities"), "utf8"));
   } catch (error) {
-    const commandError = error as NodeJS.ErrnoException & {
-      stderr?: string;
-      stdout?: string;
-    };
-    const details = [commandError.stderr, commandError.stdout, commandError.message]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .map(stripAnsi)
-      .join("\n")
-      .trim();
-    return { output: "", error: details || "git identity command failed" };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("No saved profiles. Save one first with: git identity add PROFILE");
+    }
+    throw new Error("Unable to read ~/.gitidentities; check its JSON format.");
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("~/.gitidentities must contain an object of saved profiles.");
+  }
+  for (const value of Object.values(data)) {
+    if (!value || typeof value.name !== "string" || typeof value.email !== "string" ||
+        (value.signingKey !== undefined && typeof value.signingKey !== "string")) {
+      throw new Error("Each saved profile must contain a name and email, and an optional string signingKey.");
+    }
+  }
+  return data as Record<string, Profile>;
+}
+
+async function run(cwd: string, args: string[]): Promise<string> {
+  try {
+    const result = await exec("git", args, { cwd, timeout: 15_000, maxBuffer: 128 * 1024 });
+    return result.stdout.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
+  } catch (error) {
+    const failure = error as Error & { stderr?: string };
+    throw new Error(failure.stderr?.trim() || failure.message);
   }
 }
 
-async function requireRepository(cwd: string): Promise<string | undefined> {
+async function config(cwd: string, scope: Scope, key: string): Promise<string | undefined> {
   try {
-    const result = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      env: { ...process.env, NO_COLOR: "1" },
-    });
+    const result = await exec("git", ["config", `--${scope}`, "--get", key], { cwd, timeout: 15_000 });
     return result.stdout.trim();
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return undefined;
+    throw error;
   }
 }
 
-async function getProfiles(cwd: string): Promise<string[]> {
-  const result = await runGitIdentity(["ls"], cwd);
-  if (result.error) throw new Error(result.error);
-  return result.output.split("\n").map((profile) => profile.trim()).filter(Boolean);
-}
-
-async function getProfileDetails(profile: string, cwd: string): Promise<string> {
-  const result = await runGitIdentity(["show", profile], cwd);
-  if (result.error) throw new Error(result.error);
-  return result.output.replace(/\n+/g, " | ");
-}
-
-async function chooseProfile(ctx: UiContext): Promise<string | undefined> {
-  const profiles = await getProfiles(ctx.cwd);
-  if (profiles.length === 0) {
-    throw new Error("No saved Git identities were found.");
-  }
-
-  const choice = await ctx.ui.select("Choose a Git identity", [...profiles, "Cancel"]);
-  return choice && choice !== "Cancel" ? choice : undefined;
-}
-
-async function chooseScope(ctx: UiContext): Promise<Scope | undefined> {
-  const choice = await ctx.ui.select("Apply the identity to", [
-    "Current repository",
-    "Global Git config",
-    "Cancel",
-  ]);
-  if (choice === "Current repository") return "local";
-  if (choice === "Global Git config") return "global";
-  return undefined;
-}
-
-async function applyIdentity(profile: string, scope: Scope, cwd: string): Promise<string> {
-  if (scope === "local") {
-    const repository = await requireRepository(cwd);
-    if (!repository) {
-      throw new Error("The current directory is not inside a Git repository. Choose global scope instead.");
-    }
-  }
-
-  const result = await runGitIdentity(
-    ["use", profile, ...(scope === "global" ? ["--global"] : [])],
-    cwd,
-  );
-  if (result.error) throw new Error(result.error);
-  return result.output || `Identity set to ${profile}`;
-}
-
-async function resetLocalIdentity(cwd: string): Promise<string> {
-  const repository = await requireRepository(cwd);
-  if (!repository) {
-    throw new Error("The current directory is not inside a Git repository.");
-  }
-
-  const result = await runGitIdentity(["reset"], cwd);
-  if (result.error) throw new Error(result.error);
-  return result.output || "Local Git identity reset";
-}
-
-async function listIdentities(cwd: string): Promise<string> {
-  const profiles = await getProfiles(cwd);
-  const details = await Promise.all(
-    profiles.map(async (profile) => `${profile}: ${await getProfileDetails(profile, cwd)}`),
-  );
-  return details.join("\n");
-}
-
-async function showCurrentIdentity(cwd: string): Promise<string> {
-  const local = await runGitIdentity(["current"], cwd);
-  const global = await runGitIdentity(["current", "--global"], cwd);
-  const lines = [];
-  if (!local.error) lines.push(`Current scope: ${local.output}`);
-  if (!global.error) lines.push(`Global scope: ${global.output}`);
-  if (lines.length === 0) throw new Error(local.error || global.error || "Unable to read Git identity");
-  return lines.join("\n");
-}
-
-function resultText(text: string) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details: {},
-  };
-}
-
-async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
-  const args = rawArgs.trim().split(/\s+/).filter(Boolean);
-  const command = args[0];
-
+async function repository(cwd: string): Promise<void> {
   try {
-    if (command === "list") {
-      ctx.ui.notify(await listIdentities(ctx.cwd), "info");
-      return;
-    }
-    if (command === "current") {
-      ctx.ui.notify(await showCurrentIdentity(ctx.cwd), "info");
-      return;
-    }
-    if (command === "reset") {
-      ctx.ui.notify(await resetLocalIdentity(ctx.cwd), "info");
-      return;
-    }
-    if (command === "help") {
-      ctx.ui.notify(
-        "Usage: /gitid [profile] [--global] | /gitid reset | /gitid list | /gitid current",
-        "info",
-      );
-      return;
-    }
+    await run(cwd, ["rev-parse", "--git-dir"]);
+  } catch {
+    throw new Error("Current directory is not a Git repository. Use --global for global settings.");
+  }
+}
 
-    const global = args.includes("--global");
-    const explicitProfile = args.find((arg) => arg !== "--global");
-    const profile = explicitProfile || (await chooseProfile(ctx));
-    if (!profile) return;
+async function apply(cwd: string, id: string, scope: Scope): Promise<string> {
+  const saved = profiles();
+  if (!Object.hasOwn(saved, id)) throw new Error(`Unknown profile: ${id}`);
+  const profile = saved[id];
+  // Upstream interpolates these values into double-quoted shell commands.
+  // Reject shell syntax before invoking its CLI, even though our own call uses execFile.
+  for (const value of [profile.name, profile.email, profile.signingKey ?? ""]) {
+    if (/["`$\\\r\n\0]/.test(value)) {
+      throw new Error("This profile contains characters unsupported by git-identity's shell quoting.");
+    }
+  }
+  if (scope === "local") await repository(cwd);
+  await run(cwd, ["identity", "use", id, ...(scope === "global" ? ["--global"] : [])]);
+  // Upstream may report success after a failed git config; verify actual writes.
+  if (await config(cwd, scope, "user.name") !== profile.name ||
+      await config(cwd, scope, "user.email") !== profile.email) {
+    throw new Error("git-identity did not apply the requested name and email. Inspect Git config before committing.");
+  }
+  return `Set ${scope} identity: ${id} — ${profile.name} <${profile.email}>`;
+}
 
-    const scope = global ? "global" : explicitProfile ? "local" : await chooseScope(ctx);
-    if (!scope) return;
+async function reset(cwd: string, scope: Scope): Promise<string> {
+  if (scope === "local") {
+    await repository(cwd);
+    await run(cwd, ["identity", "reset"]);
+  } else {
+    // Upstream has no global reset. Only remove name and email at the requested scope.
+    for (const key of ["user.name", "user.email"]) {
+      try {
+        await exec("git", ["config", "--global", "--unset-all", key], { cwd, timeout: 15_000 });
+      } catch (error) {
+        if ((error as { code?: number }).code !== 5) throw error;
+      }
+    }
+  }
+  for (const key of ["user.name", "user.email"]) {
+    if (await config(cwd, scope, key) !== undefined) {
+      throw new Error(`Could not fully clear ${scope} ${key}; check included Git configuration files.`);
+    }
+  }
+  return `Cleared ${scope} name and email. Settings from other scopes may still apply.`;
+}
 
-    const details = await applyIdentity(profile, scope, ctx.cwd);
-    ctx.ui.notify(`${details}\nProfile: ${await getProfileDetails(profile, ctx.cwd)}`, "info");
+async function handle(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  if (!ctx.hasUI) throw new Error("/gitid requires interactive pi or an RPC client supporting extension UI.");
+  try {
+    const tokens = args.trim().split(/\s+/).filter(Boolean);
+    const scope: Scope = tokens.includes("--global") ? "global" : "local";
+    const positional = tokens.filter((token) => token !== "--global");
+    if (positional.length > 1 || tokens.filter((token) => token === "--global").length > 1 ||
+        positional.some((token) => token.startsWith("-"))) throw new Error(help);
+    let action = positional[0];
+    let selectedScope = scope;
+    let id: string | undefined;
+    if (!action) {
+      if (tokens.length === 0) {
+        const choices = ["Set repository identity", "Set global identity", "Clear repository identity", "Clear global identity", "Show current identity", "List saved profiles"];
+        const chosen = await ctx.ui.select("Git identity", choices);
+        if (!chosen) return;
+        const index = choices.indexOf(chosen);
+        if (index < 0) return;
+        selectedScope = index === 1 || index === 3 ? "global" : "local";
+        action = index < 2 ? "use" : index < 4 ? "reset" : index === 4 ? "current" : "list";
+      } else {
+        action = "use";
+      }
+      if (action === "use") {
+        const saved = profiles();
+        const ids = Object.keys(saved);
+        if (!ids.length) throw new Error("No saved profiles. Use git identity add PROFILE first.");
+        const labels = ids.map((key) => `${key} — ${saved[key].name} <${saved[key].email}>`);
+        const choice = await ctx.ui.select(`Choose ${selectedScope} identity`, labels);
+        if (!choice) return;
+        id = ids[labels.indexOf(choice)];
+        if (!id) return;
+      }
+    }
+    let output: string;
+    if (action === "help") {
+      output = help;
+    } else if (action === "list") {
+      output = Object.entries(profiles()).map(([key, value]) => `${key} — ${value.name} <${value.email}>`).join("\n") || "No saved profiles.";
+    } else if (action === "current") {
+      // Git reads below do not create a profile store, unlike upstream current.
+      try {
+        const result = await exec("git", ["config", "--show-origin", "--get-regexp", "^user\\.(name|email)$"], { cwd: ctx.cwd, timeout: 15_000 });
+        output = result.stdout.trim();
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+        output = "No identity configured.";
+      }
+    } else if (action === "reset") {
+      output = await reset(ctx.cwd, selectedScope);
+    } else {
+      output = await apply(ctx.cwd, id ?? action, selectedScope);
+    }
+    ctx.ui.notify(output, "info");
   } catch (error) {
     ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
   }
 }
 
-const gitIdentityTool = defineTool({
-  name: "git_identity",
-  label: "Git identity",
-  description:
-    "Use saved git-identity profiles. This tool never auto-switches identities; choose an action explicitly. Local scope is the default for use.",
-  parameters: Type.Object({
-    action: StringEnum(["choose", "use", "reset", "list", "current"] as const, {
-      description: "Explicit identity action",
-    }),
-    profile: Type.Optional(Type.String({ description: "Saved profile name, such as github or cmiot" })),
-    scope: Type.Optional(
-      StringEnum(["local", "global"] as const, {
-        description: "Apply to the current repository or global Git config",
-      }),
-    ),
-  }),
-  async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-    try {
-      if (params.action === "list") return resultText(await listIdentities(ctx.cwd));
-      if (params.action === "current") return resultText(await showCurrentIdentity(ctx.cwd));
-      if (params.action === "reset") return resultText(await resetLocalIdentity(ctx.cwd));
-
-      const profile = params.profile || (await chooseProfile(ctx));
-      if (!profile) return resultText("Identity selection cancelled.");
-      const scope = params.scope || (params.action === "choose" ? await chooseScope(ctx) : "local");
-      if (!scope) return resultText("Identity selection cancelled.");
-      return resultText(await applyIdentity(profile, scope, ctx.cwd));
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : String(error));
-    }
-  },
-});
-
 export default function (pi: ExtensionAPI) {
-  pi.registerCommand("gitid", {
-    description: "Choose or inspect a saved Git identity",
-    handler: handleCommand,
-  });
-  pi.registerCommand("git-identity", {
-    description: "Choose or inspect a saved Git identity",
-    handler: handleCommand,
-  });
-  pi.registerTool(gitIdentityTool);
+  for (const command of ["gitid", "git-identity"]) {
+    pi.registerCommand(command, {
+      description: "Choose, clear or inspect Git identity (git-identity wrapper)",
+      getArgumentCompletions(prefix) {
+        let ids: string[] = [];
+        try { ids = Object.keys(profiles()); } catch { /* Show actions even without a store. */ }
+        const words = prefix.split(/\s+/);
+        const last = words.pop() ?? "";
+        const candidates = words.length ? ["--global"] : [...ids, "reset", "list", "current", "help", "--global"];
+        return candidates.filter((value) => value.startsWith(last)).map((value) => ({
+          value: [...words, value].join(" "), label: value,
+        }));
+      },
+      handler: handle,
+    });
+  }
 }

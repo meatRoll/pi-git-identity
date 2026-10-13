@@ -2,13 +2,34 @@
 
 ## git-identity 1.1.4
 
-This project invokes the npm package [`git-identity`](https://github.com/runebaas/git-identity) version `1.1.4` as its implementation for profile storage and Git configuration.
-
-Copyright (c) 2018 runebaas.
-
-The package is distributed under the MIT License. Its source and license are available in the package repository and npm registry:
+This extension wraps the separately installed third-party npm CLI `git-identity@1.1.4` for profile application and local reset. Profile storage remains in the upstream `~/.gitidentities` file. It is an adapter, not an independent implementation of that CLI.
 
 - Repository: https://github.com/runebaas/git-identity
 - Package: https://www.npmjs.com/package/git-identity
+- Author: Daan Boerlage (runebaas)
 
-The adapter in this repository does not copy or modify the third-party package.
+The adapter does not copy or modify upstream implementation code. The original license is reproduced below from the installed `git-identity@1.1.4` package.
+
+```text
+MIT License
+
+Copyright (c) Daan Boerlage <runebaas@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

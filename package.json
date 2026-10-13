@@ -11,6 +11,7 @@
   "homepage": "https://github.com/meatRoll/pi-git-identity#readme",
   "keywords": [
     "pi",
+    "pi-package",
     "pi-extension",
     "git",
     "git-identity"
@@ -21,14 +22,15 @@
     ]
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test git-identity.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "latest",
+    "git-identity": "1.1.4",
+    "tsx": "^4.20.6",
     "@earendil-works/pi-coding-agent": "latest",
     "@types/node": "latest",
     "typescript": "latest"

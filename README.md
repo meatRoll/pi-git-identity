@@ -1,65 +1,100 @@
 # pi-git-identity
 
-A small [pi](https://pi.dev) extension that adds an interactive Git identity picker.
+An interactive Git identity picker for [pi](https://pi.dev). Type `/gitid` and choose an action with the arrow keys; profile names, commit names and email addresses appear in the picker.
 
-It is an explicit wrapper around the third-party [`git-identity`](https://github.com/runebaas/git-identity) package, pinned and tested with `git-identity@1.1.4`. The extension delegates profile storage and Git configuration changes to that package.
+**This extension wraps the third-party [`runebaas/git-identity`](https://github.com/runebaas/git-identity) CLI, tested with `git-identity@1.1.4`.** Saved profiles stay in its existing `~/.gitidentities` file. Repository identity changes are delegated to its `use` and `reset` commands. Global clearing, which upstream does not provide, uses Git's own config commands.
 
-The extension does not automatically switch identities, inspect remotes, install Git hooks, or create repository rules. It only changes Git identity when you run its command or the agent calls its tool.
+## Install
 
-## Prerequisites
-
-Install the wrapped third-party package first:
+Install the upstream CLI and check that Git can find it:
 
 ```bash
 npm install --global git-identity@1.1.4
-```
-
-The package stores saved profiles in `~/.gitidentities` and supports the same local and global scope as its own CLI.
-
-## Install in pi
-
-Install this repository as a pi package:
-
-```bash
+git identity --version
 pi install git:github.com/meatRoll/pi-git-identity
 ```
 
-For a one-session test:
+Run `/reload` in an existing pi session. With nvm, the upstream CLI must be installed in the Node version available on pi's PATH.
+
+To save a profile from your current Git identity:
 
 ```bash
-pi -e git:github.com/meatRoll/pi-git-identity
+git identity add personal
 ```
 
-After installing or changing the extension, run `/reload` in pi.
+Repeat with your other identities, or edit `~/.gitidentities`. The store contains only profile data, for example:
 
-## Commands
-
-Run `/gitid` or `/git-identity` with no arguments to open a picker. The extension first lets you choose a saved profile and then choose whether to apply it to the current repository or the global Git config.
-
-Direct forms are also available:
-
-```text
-/gitid github             Apply github to the current repository
-/gitid github --global   Apply github to global Git config
-/gitid reset             Remove local identity settings from the current repository
-/gitid list              List saved profiles
-/gitid current           Show current and global identities
-/gitid help              Show command usage
+```json
+{
+  "personal": {
+    "name": "Example User",
+    "email": "personal@example.test",
+    "signingKey": ""
+  },
+  "work": {
+    "name": "Example User",
+    "email": "work@example.test",
+    "signingKey": ""
+  }
+}
 ```
 
-The agent can use the `git_identity` tool with explicit actions: `choose`, `use`, `reset`, `list`, and `current`. A tool request without a scope uses the current repository, which avoids changing global configuration accidentally.
+Do not use `reset`, `list`, `current` or `help` as profile names; they are command actions.
 
-## Development
+## Use
+
+`/gitid` and `/git-identity` open the same menu:
+
+- Set repository identity
+- Set global identity
+- Clear repository identity
+- Clear global identity
+- Show current identity
+- List saved profiles
+
+Choosing a set action opens a second picker showing each saved name and email. Escape closes either picker without applying a change. Slash commands and their arguments support pi's command completion.
+
+Direct commands are also available:
+
+| Command | Effect |
+| --- | --- |
+| `/gitid personal` | Apply a profile to the current repository |
+| `/gitid personal --global` | Apply a profile to global Git config |
+| `/gitid --global` | Open the global profile picker |
+| `/gitid reset` | Clear current repository identity settings |
+| `/gitid reset --global` | Remove global `user.name` and `user.email` |
+| `/gitid list` | List saved profiles with names and emails |
+| `/gitid current` | Show configured names/emails and their source files |
+| `/gitid help` | Show usage |
+
+Changes persist in ordinary Git configuration until you clear or replace them. They also affect commits made outside pi. Clearing a scope allows identities from other scopes or included files to apply again. Included configuration files are not rewritten; the extension reports an error if an included identity prevents a requested clear.
+
+There are no automatic identity switches, remote rules, hooks, background processes, repository tracking files or agent-callable mutation tools. Merely loading the extension or checking current configuration does not create a profile file or change Git configuration.
+
+## Upstream behavior and limits
+
+`git-identity@1.1.4` is an older CLI. Its `use` command also manages `user.signingkey`, and its local `reset` removes that key along with the local name/email. It may additionally change `core.gpgsign`. This adapter preserves upstream behavior; check your signing configuration if you use signed commits. Global clearing in this adapter removes only name and email.
+
+The adapter passes arguments with Node's `execFile`, checks the requested profile before applying it, and verifies name/email writes because upstream can report success despite failed Git writes. Upstream itself builds shell commands, so the adapter rejects names, emails and signing keys containing shell-sensitive quotes, backticks, dollar signs, backslashes or line breaks.
+
+`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `author.*`, `committer.*`, explicit `--author`, and history-preserving operations such as cherry-pick can override or preserve commit identity. This is a convenient configuration picker, not a commit enforcement mechanism. It changes no existing commits or GitHub login credentials.
+
+## Development and validation
 
 ```bash
-npm install
+npm install --ignore-scripts
 npm run typecheck
+npm test
 ```
 
-The extension invokes `git identity` with argument arrays through Node's `execFile`; it does not build shell commands from profile values.
+Tests invoke the real upstream CLI in isolated temporary repositories and a temporary HOME. They cover picker cancellation, repository/global setting and clearing, commit author/committer, invalid inputs, config lock failures and argument completion.
 
-## Third-party attribution
+The upstream CLI has been checked separately with Git 2.39.5 and Git 2.56.0. Wrapper integration tests use Git 2.39.5. pi loading has been checked with the installed pi 0.85.1, and types are checked with the development dependency version recorded in `package-lock.json`.
 
-This repository is an adapter around `git-identity@1.1.4` by [runebaas](https://github.com/runebaas/git-identity), licensed under MIT. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The pinned upstream development dependency brings older transitive dependencies. `npm audit` currently reports advisories in `tmp` and `external-editor`; this adapter uses identity operations, not the editor functionality. The extension does not bundle the upstream CLI into its production package; it invokes your installed CLI.
 
-The adapter code in this repository is also released under the MIT License.
+## Attribution and license
+
+This repository was AI-assisted. Adapter code is MIT licensed. `git-identity` is a separate MIT-licensed project by Daan Boerlage (runebaas). Its original copyright and license are reproduced in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Your actual profile store, Git configuration, credentials and email history are never included in this repository.
